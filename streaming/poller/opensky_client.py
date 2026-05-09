@@ -34,26 +34,38 @@ _FIELD_NAMES = [
 
 
 def build_producer() -> KafkaProducer:
-    # TODO(P3): return KafkaProducer with value_serializer=lambda v: json.dumps(v).encode()
-    pass
+    return KafkaProducer(
+        bootstrap_servers=KAFKA_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode()
+    )
 
 
 def fetch_states() -> Optional[List[List[Any]]]:
     """Return raw state vectors from OpenSky, or None on error."""
-    # TODO(P3): GET {OPENSKY_BASE_URL}/states/all, return response.json()["states"]
-    pass
+    try:
+        response = requests.get(f"{OPENSKY_BASE_URL}/states/all")
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        return response.json()["states"]
+    except requests.exceptions.RequestException as e:
+        logger.error("Error fetching states from OpenSky: %s", e)
+        return None
 
 
 def parse_state(raw: List[Any]) -> Dict[str, Any]:
     """Map a raw OpenSky state array to a named dict."""
-    # TODO(P3): zip _FIELD_NAMES with raw, add polled_at timestamp
-    pass
+    state = dict(zip(_FIELD_NAMES, raw))
+    state["polled_at"] = datetime.now(timezone.utc).isoformat()
+    return state
 
 
 def produce_states(producer: KafkaProducer, states: List[List[Any]]) -> int:
     """Publish each state to Kafka. Return the number of messages produced."""
-    # TODO(P3): for each state, parse_state then producer.send(KAFKA_TOPIC, value=...)
-    pass
+    count = 0
+    for state_raw in states:
+        parsed_state = parse_state(state_raw)
+        producer.send(KAFKA_TOPIC, value=parsed_state)
+        count += 1
+    return count
 
 
 def run_poll_loop() -> None:
