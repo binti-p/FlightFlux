@@ -53,33 +53,97 @@ FLIGHT_SCHEMA = StructType(
 
 
 def build_spark_session() -> SparkSession:
-    # TODO(P3): configure SparkSession with kafka package and checkpoint location
-    pass
+    return (
+        SparkSession.builder.appName("FlightStream")
+        .config(
+            "spark.jars.packages",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
+            "org.mongodb.spark:mongo-spark-connector_2.12:3.0.1",
+        )
+        .config("spark.sql.streaming.checkpointLocation", "/tmp/spark-checkpoint")
+        .getOrCreate()
+    )
 
 
 def read_kafka_stream(spark: SparkSession):
     """Return a streaming DataFrame from the flights-raw Kafka topic."""
-    # TODO(P3): spark.readStream.format("kafka").option("kafka.bootstrap.servers", ...).load()
-    pass
+    return (
+        spark.readStream.format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_SERVERS)
+        .option("subscribe", KAFKA_TOPIC_RAW)
+        .load()
+    )
 
 
 def parse_messages(raw_df):
     """Deserialize JSON value column into FLIGHT_SCHEMA struct."""
-    # TODO(P3): F.from_json(F.col("value").cast("string"), FLIGHT_SCHEMA)
-    pass
+    return raw_df.select(F.from_json(F.col("value").cast("string"), FLIGHT_SCHEMA).alias("flight"))
+
+
+def load_airport_reference(spark: SparkSession):
+    """Load airport reference data from MongoDB into a static DataFrame."""
+    return (
+        spark.read.format("mongo")
+        .option("uri", MONGODB_URI)
+        .option("database", MONGODB_DB)
+        .option("collection", "airports")  # Assuming "airports" collection
+        .load()
+    )
 
 
 def enrich_with_airports(flight_df, airport_ref_df):
     """Left-join flight_df with airport reference on ORIGIN airport code."""
-    # TODO(P3): join on origin/dest, add airport name and timezone columns
-    pass
+    # Assume airport_ref_df has 'icao_code', 'name', 'timezone', 'country'
+    # And flight_df has 'flight.origin_country'
+
+    # Select a single representative airport for each country to avoid one-to-many join issues.
+    # This is a heuristic, as the actual origin airport is not available in flight_df.
+    representative_airports = airport_ref_df.groupBy("country").agg(
+        F.min("icao_code").alias("icao_code"),
+        F.min("name").alias("airport_name"),
+        F.min("timezone").alias("airport_timezone")
+    ).withColumnRenamed("country", "airport_country")
+
+    enriched_df = flight_df.join(
+        representative_airports,
+        flight_df.flight.origin_country == representative_airports.airport_country,
+        "left_outer"
+    ).select(
+        flight_df.flight["*"],  # Select all fields from the flight struct
+        F.col("icao_code").alias("origin_airport_icao_code"),
+        F.col("airport_name").alias("origin_airport_name"),
+        F.col("airport_timezone").alias("origin_airport_timezone")
+    )
+    return enriched_df
+
+
+def _write_to_redis_partition(rows: Iterator) -> None:
+    """Helper function to write rows to Redis within a partition."""
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
+    for row in rows:
+        # Convert row to dictionary and then to JSON string
+        flight_data = row.asDict()
+        icao24 = flight_data.get("icao24")
+        if icao24:
+            r.setex(f"flight:{icao24}", REDIS_TTL, json.dumps(flight_data))
 
 
 def write_to_redis_and_mongo(batch_df, batch_id: int) -> None:
     """foreachBatch sink: write each micro-batch to Redis and MongoDB."""
-    # TODO(P3): collect rows, write each to Redis as SETEX flight:<icao24>
-    # TODO(P3): bulk-insert batch into MongoDB flights_enriched collection
-    pass
+    logger.info(f"Writing batch {batch_id} to Redis and MongoDB...")
+
+    # Write to Redis
+    batch_df.foreachPartition(_write_to_redis_partition)
+
+    # Write to MongoDB
+    batch_df.write.format("mongo") \
+        .mode("append") \
+        .option("uri", MONGODB_URI) \
+        .option("database", MONGODB_DB) \
+        .option("collection", "flights_enriched") \
+        .save()
+
+    logger.info(f"Finished writing batch {batch_id}.")
 
 
 def main() -> None:
@@ -89,12 +153,11 @@ def main() -> None:
     raw_stream = read_kafka_stream(spark)
     flight_df = parse_messages(raw_stream)
 
-    # TODO(P3): load airport reference from MongoDB into a static DataFrame
-    # airport_ref = load_airport_reference(spark)
-    # enriched = enrich_with_airports(flight_df, airport_ref)
+    airport_ref = load_airport_reference(spark)
+    enriched = enrich_with_airports(flight_df, airport_ref)
 
     query = (
-        flight_df.writeStream
+        enriched.writeStream
         .foreachBatch(write_to_redis_and_mongo)
         .option("checkpointLocation", "/tmp/flight-stream-checkpoint")
         .start()

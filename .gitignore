@@ -1,6 +1,12 @@
-# Environment
-.env
-*.env
+
+
+# CDK / Node
+infra/node_modules/
+infra/dist/
+infra/cdk.out/
+infra/*.js
+infra/*.d.ts
+infra/package-lock.json
 
 # Python
 __pycache__/
@@ -37,6 +43,7 @@ models/
 
 # IDEs
 .idea/
+.claude/
 .vscode/
 *.swp
 *.swo
