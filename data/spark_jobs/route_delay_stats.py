@@ -38,7 +38,15 @@ def build_spark_session() -> SparkSession:
 def load_parquet(
     spark: SparkSession, input_path: str, year: Optional[int], month: Optional[int]
 ) -> DataFrame:
-    df = spark.read.parquet(input_path)
+    # Glob explicitly to year=*/month=*/ so we don't accidentally read sibling
+    # paths like features/ that contain Parquet files with a different schema.
+    # `basePath` keeps year/month as partition columns despite the explicit glob.
+    base = input_path.rstrip("/")
+    df = (
+        spark.read
+        .option("basePath", base)
+        .parquet(f"{base}/year=*/month=*/")
+    )
     if year is not None:
         df = df.filter(F.col("year") == year)
     if month is not None:

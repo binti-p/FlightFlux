@@ -5,13 +5,16 @@ Read this before training a model or designing dashboard features.
 
 ## Scope
 
-- **Date range ingested:** **December 2023 only.** One Parquet partition:
-  `s3://flightdelay-processed/year=2023/month=12/` (~3.3 MB Snappy,
-  2 part files, ingested 2026-05-10). The dev plan called for 2019–2024
-  (~7 GB); we narrowed to a single month for the demo budget. The
-  pipeline supports more — re-running `csv_to_parquet.py` against
-  additional raw months in `s3://flightdelay-raw/bts/` will append new
-  partitions without touching `2023/12/` (dynamic partition overwrite).
+- **Date range ingested:** **36 monthly partitions, Jan 2021 through
+  Dec 2023** (every month at `year=YYYY/month=M/` under
+  `s3://flightdelay-processed/`), ~119 MB total compressed Parquet.
+  Pre-aggregations refreshed against the full 3 years live at
+  `s3://flightdelay-processed/features/route_delay_stats/`. Ingested
+  2026-05-10 via an EMR-resident `download_bts.sh` step that pulls the
+  monthly zips directly into the cluster master, then the standard
+  `csv_to_parquet.py` Spark step. The dev plan called for 2019–2024
+  (~7 GB); we landed on the most recent 3 full years available given
+  the dataset boundary noted below.
 - **Source dataset boundary:** BTS publishes the *Reporting Carrier*
   on-time dataset only through **December 2023** in PREZIP. From
   January 2024 onward they switched to a renamed *Marketing Carrier*

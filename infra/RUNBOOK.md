@@ -87,6 +87,33 @@ If the EC2 instance was stopped/restarted, MongoDB should auto-start
 because `systemctl enable mongod` is in user-data. If it didn't, SSH in
 and `sudo systemctl start mongod`.
 
+### Spark step fails immediately with no error reason
+
+Symptom: an EMR Spark step transitions `RUNNING → FAILED` in under a
+minute, `Status.StateChangeReason` is empty, and (because the CDK stack
+doesn't set a `LogUri`) the master logs are gone with the cluster.
+
+Two things to check:
+
+1. **Stray `_$folder$` markers in the input bucket.** Hadoop / older
+   S3 filesystems sometimes leave zero-byte placeholder objects whose
+   keys end in `_$folder$` at the parent of partitioned data; they
+   confuse Spark's partition discovery and break reads of the bucket.
+   Find and remove them:
+   ```bash
+   aws s3 ls s3://flightdelay-processed/ --recursive \
+     | grep '\$folder\$'
+   aws s3 rm 's3://flightdelay-processed/year=2023_$folder$'  # example
+   ```
+
+2. **Spark reading sibling paths with a different schema.** If a job
+   reads `s3://bucket/` recursively and the bucket has both partitioned
+   raw data (BTS schema) and feature aggregations (different schema),
+   schema discovery will fail. Always glob explicitly to the partition
+   pattern, e.g. `bucket/year=*/month=*/`, with `basePath` set to keep
+   the partition columns. See `data/spark_jobs/route_delay_stats.py`
+   for the canonical pattern.
+
 ### S3 access denied from EMR
 
 The EMR EC2 role (`flightflux-emr-ec2-role`) has read/write on all three
