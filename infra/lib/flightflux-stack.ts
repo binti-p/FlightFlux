@@ -5,6 +5,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as msk from 'aws-cdk-lib/aws-msk';
 import * as elasticache from 'aws-cdk-lib/aws-elasticache';
 import * as emr from 'aws-cdk-lib/aws-emr';
+import * as budgets from 'aws-cdk-lib/aws-budgets';
 import { Construct } from 'constructs';
 
 export class FlightFluxStack extends cdk.Stack {
@@ -212,6 +213,51 @@ export class FlightFluxStack extends cdk.Stack {
     // Elastic IPs for public instances
     new ec2.CfnEIP(this, 'ApiEip', { instanceId: apiInstance.instanceId });
     new ec2.CfnEIP(this, 'DashEip', { instanceId: dashInstance.instanceId });
+
+    // ─── Billing alerts ──────────────────────────────────────────────────────────
+
+    // BILLING_ALERT_EMAIL is sourced from env at synth time so we don't bake
+    // a personal address into the public repo. Set it before `cdk deploy`:
+    //   PowerShell: $env:BILLING_ALERT_EMAIL = "your@email"
+    //   bash:       export BILLING_ALERT_EMAIL=your@email
+    const billingEmail = process.env.BILLING_ALERT_EMAIL;
+    if (billingEmail) {
+      [50, 100, 200].forEach((threshold) => {
+        new budgets.CfnBudget(this, `BudgetAlert${threshold}`, {
+          budget: {
+            budgetType: 'COST',
+            timeUnit: 'MONTHLY',
+            budgetName: `flightflux-monthly-${threshold}USD`,
+            budgetLimit: { amount: threshold, unit: 'USD' },
+          },
+          notificationsWithSubscribers: [
+            {
+              notification: {
+                notificationType: 'ACTUAL',
+                comparisonOperator: 'GREATER_THAN',
+                threshold: 100,
+                thresholdType: 'PERCENTAGE',
+              },
+              subscribers: [{ subscriptionType: 'EMAIL', address: billingEmail }],
+            },
+            {
+              notification: {
+                notificationType: 'FORECASTED',
+                comparisonOperator: 'GREATER_THAN',
+                threshold: 100,
+                thresholdType: 'PERCENTAGE',
+              },
+              subscribers: [{ subscriptionType: 'EMAIL', address: billingEmail }],
+            },
+          ],
+        });
+      });
+    } else {
+      cdk.Annotations.of(this).addWarning(
+        'BILLING_ALERT_EMAIL not set — skipping budget resources. ' +
+        'Set the env var before `cdk deploy` to enable cost alerts at $50, $100, $200.',
+      );
+    }
 
     // ─── Outputs ─────────────────────────────────────────────────────────────────
 

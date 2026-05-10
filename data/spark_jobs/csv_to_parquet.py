@@ -23,6 +23,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Subset of BTS columns that downstream ML and streaming jobs need.
+# This is the *output* schema written to Parquet. The PREZIP source CSVs
+# use different column names (FlightDate, DepDelay, etc.); see
+# SOURCE_TO_CANONICAL below for the mapping applied at read time.
 BTS_SCHEMA = StructType(
     [
         StructField("FL_DATE", StringType(), nullable=True),
@@ -39,6 +42,25 @@ BTS_SCHEMA = StructType(
     ]
 )
 
+# Mapping from BTS PREZIP source column names to the canonical BTS_SCHEMA
+# names used everywhere downstream (DICTIONARY.md, ml/, data_quality/).
+# The PREZIP files name columns like 'FlightDate', 'DepDelay'; the legacy
+# DL_SelectFields form used 'FL_DATE', 'DEP_DELAY'. We standardize on the
+# legacy names because that's what the dev plan and ML code reference.
+SOURCE_TO_CANONICAL = {
+    "FlightDate":        "FL_DATE",
+    "Reporting_Airline": "OP_CARRIER",
+    "Origin":            "ORIGIN",
+    "Dest":              "DEST",
+    "CRSDepTime":        "CRS_DEP_TIME",
+    "DepDelay":          "DEP_DELAY",
+    "ArrDelay":          "ARR_DELAY",
+    "Cancelled":         "CANCELLED",
+    "Distance":          "DISTANCE",
+    "CarrierDelay":      "CARRIER_DELAY",
+    "WeatherDelay":      "WEATHER_DELAY",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BTS CSV → Parquet conversion")
@@ -48,27 +70,48 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_spark_session() -> SparkSession:
-    # TODO(P1): add any EMR-specific Spark configs here (e.g. hadoop-aws jars)
     return (
         SparkSession.builder.appName("bts-csv-to-parquet")
+        # Dynamic partition overwrite lets a re-run replace only the affected
+        # year=/month=/ partitions instead of wiping the entire output bucket.
+        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
         .getOrCreate()
     )
 
 
 def read_csvs(spark: SparkSession, input_path: str):
-    # TODO(P1): read all CSV files recursively from input_path using BTS_SCHEMA
-    pass
+    raw = (
+        spark.read
+        .option("header", "true")
+        .option("mode", "PERMISSIVE")
+        .option("recursiveFileLookup", "true")
+        .csv(input_path)
+    )
+    # All CSV columns come in as strings; cast each one to its BTS_SCHEMA
+    # type while renaming from the PREZIP source name to the canonical name.
+    select_exprs = [
+        F.col(src).cast(BTS_SCHEMA[dest].dataType).alias(dest)
+        for src, dest in SOURCE_TO_CANONICAL.items()
+    ]
+    return raw.select(*select_exprs)
 
 
 def add_partition_columns(df):
     """Derive year and month columns from FL_DATE for Parquet partitioning."""
-    # TODO(P1): parse FL_DATE and add `year` (int) and `month` (int) columns
-    pass
+    parsed = F.to_date(F.col("FL_DATE"))
+    return (
+        df.withColumn("year", F.year(parsed))
+        .withColumn("month", F.month(parsed))
+        .filter(F.col("year").isNotNull() & F.col("month").isNotNull())
+    )
 
 
 def write_parquet(df, output_path: str) -> None:
-    # TODO(P1): write df as Parquet, partitioned by year and month, mode=overwrite
-    pass
+    (
+        df.write.mode("overwrite")
+        .partitionBy("year", "month")
+        .parquet(output_path)
+    )
 
 
 def main() -> None:
