@@ -48,27 +48,46 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_spark_session() -> SparkSession:
-    # TODO(P1): add any EMR-specific Spark configs here (e.g. hadoop-aws jars)
     return (
         SparkSession.builder.appName("bts-csv-to-parquet")
+        # Dynamic partition overwrite lets a re-run replace only the affected
+        # year=/month=/ partitions instead of wiping the entire output bucket.
+        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
         .getOrCreate()
     )
 
 
 def read_csvs(spark: SparkSession, input_path: str):
-    # TODO(P1): read all CSV files recursively from input_path using BTS_SCHEMA
-    pass
+    return (
+        spark.read
+        .option("header", "true")
+        # enforceSchema=false makes Spark match columns by header name rather
+        # than position, so BTS files with extra columns we don't care about
+        # still parse cleanly into BTS_SCHEMA.
+        .option("enforceSchema", "false")
+        .option("mode", "PERMISSIVE")
+        .option("recursiveFileLookup", "true")
+        .schema(BTS_SCHEMA)
+        .csv(input_path)
+    )
 
 
 def add_partition_columns(df):
     """Derive year and month columns from FL_DATE for Parquet partitioning."""
-    # TODO(P1): parse FL_DATE and add `year` (int) and `month` (int) columns
-    pass
+    parsed = F.to_date(F.col("FL_DATE"))
+    return (
+        df.withColumn("year", F.year(parsed))
+        .withColumn("month", F.month(parsed))
+        .filter(F.col("year").isNotNull() & F.col("month").isNotNull())
+    )
 
 
 def write_parquet(df, output_path: str) -> None:
-    # TODO(P1): write df as Parquet, partitioned by year and month, mode=overwrite
-    pass
+    (
+        df.write.mode("overwrite")
+        .partitionBy("year", "month")
+        .parquet(output_path)
+    )
 
 
 def main() -> None:
