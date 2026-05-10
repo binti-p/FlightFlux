@@ -112,3 +112,62 @@ df = spark.read.parquet("s3://flightdelay-processed/")
 # Filter to a date window using the partition columns — no full scan.
 df.filter((df.year == 2024) & (df.month == 1)).count()
 ```
+
+## Feature aggregations
+
+The Spark job [`spark_jobs/route_delay_stats.py`](spark_jobs/route_delay_stats.py)
+produces three pre-computed delay-statistic tables for ML feature
+engineering. Generated against the same canonical Parquet described
+above.
+
+### Storage
+
+| Table | Path |
+|-------|------|
+| By route | `s3://flightdelay-processed/features/route_delay_stats/by_route/` |
+| By carrier | `s3://flightdelay-processed/features/route_delay_stats/by_carrier/` |
+| By hour | `s3://flightdelay-processed/features/route_delay_stats/by_hour/` |
+
+All three are Snappy Parquet, single part file each (small enough that
+partitioning would be wasteful).
+
+### Pre-aggregation filters
+
+These are applied in `load_parquet` before the group-by, so the
+statistics are computed over a clean denominator:
+
+- `CANCELLED == 0.0` — cancelled flights have NULL `DEP_DELAY` and
+  would skew mean / count statistics
+- `DEP_DELAY IS NOT NULL` — guards against the rare non-cancelled row
+  with NULL delay
+
+### Aggregate columns (shared across all three tables)
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `flight_count` | long | Number of flights in the group |
+| `mean_dep_delay` | double | Mean `DEP_DELAY` in minutes; can be negative for routes that typically depart early |
+| `pct_delayed_15min` | double | Fraction of flights with `DEP_DELAY > 15`, range `[0.0, 1.0]` |
+
+### Group-by keys per table
+
+| Table | Group-by columns |
+|-------|------------------|
+| `by_route` | `ORIGIN`, `DEST` |
+| `by_carrier` | `OP_CARRIER` |
+| `by_hour` | `hour_of_day` — `int`, range `0..23`, derived as `(CRS_DEP_TIME / 100) % 24`; the BTS edge case `2400` wraps to `0` |
+
+### Joining against raw flights
+
+```python
+raw = spark.read.parquet("s3://flightdelay-processed/")
+by_route = spark.read.parquet(
+    "s3://flightdelay-processed/features/route_delay_stats/by_route/"
+)
+
+# Historical route-level delay stats become per-flight features
+enriched = raw.join(by_route, on=["ORIGIN", "DEST"], how="left")
+```
+
+`pct_delayed_15min` is the "historical route delay rate" feature the dev
+plan calls out for the Random Forest training input.
