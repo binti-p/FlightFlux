@@ -5,10 +5,19 @@ Read this before training a model or designing dashboard features.
 
 ## Scope
 
-- **Date range ingested:** TBD on first run. The dev plan calls for
-  2019–2024 (~7 GB); for the demo timeline only a subset (e.g. a single
-  month or year) was ingested. Update this section after running
-  `csv_to_parquet.py` to record the actual partitions present in S3.
+- **Date range ingested:** **December 2023 only.** One Parquet partition:
+  `s3://flightdelay-processed/year=2023/month=12/` (~3.3 MB Snappy,
+  2 part files, ingested 2026-05-10). The dev plan called for 2019–2024
+  (~7 GB); we narrowed to a single month for the demo budget. The
+  pipeline supports more — re-running `csv_to_parquet.py` against
+  additional raw months in `s3://flightdelay-raw/bts/` will append new
+  partitions without touching `2023/12/` (dynamic partition overwrite).
+- **Source dataset boundary:** BTS publishes the *Reporting Carrier*
+  on-time dataset only through **December 2023** in PREZIP. From
+  January 2024 onward they switched to a renamed *Marketing Carrier*
+  dataset with different column names — not compatible with the current
+  `BTS_SCHEMA`. Extending past 2023 would require either an
+  alternate-source ingestion path or a revised schema mapping.
 - **Domestic only.** BTS Reporting Carrier On-Time Performance covers
   U.S. domestic flights operated by carriers reporting to BTS. Foreign
   carriers, charters, and most regional sub-carriers are out of scope.
