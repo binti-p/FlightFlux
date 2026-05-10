@@ -26,22 +26,60 @@ CheckResult = Tuple[bool, str]
 
 # ── Parquet checks (P1 + P4) ─────────────────────────────────────────────────
 
+_spark_singleton = None
+
+
+def _spark():
+    """Lazy local SparkSession reused across checks within one run."""
+    global _spark_singleton
+    if _spark_singleton is None:
+        from pyspark.sql import SparkSession
+        _spark_singleton = (
+            SparkSession.builder
+            .appName("flightflux-dq")
+            .master("local[2]")
+            .config("spark.ui.enabled", "false")
+            .getOrCreate()
+        )
+    return _spark_singleton
+
+
 def check_required_bts_columns(parquet_path: str) -> CheckResult:
     """All expected BTS schema columns must be present in the Parquet files."""
-    # TODO(P4): read schema from parquet_path with pandas or PySpark, compare to BTS_SCHEMA columns
-    pass
+    from data.spark_jobs.csv_to_parquet import BTS_SCHEMA
+    actual = set(_spark().read.parquet(parquet_path).columns)
+    expected = {f.name for f in BTS_SCHEMA.fields}
+    missing = expected - actual
+    if missing:
+        return False, f"missing required columns in {parquet_path}: {sorted(missing)}"
+    return True, f"all {len(expected)} BTS_SCHEMA columns present in {parquet_path}"
 
 
 def check_dep_delay_range(parquet_path: str) -> CheckResult:
     """DEP_DELAY values must be between -60 and 600 minutes."""
-    # TODO(P4): sample rows, assert min >= -60 and max <= 600
-    pass
+    from pyspark.sql import functions as F
+    df = _spark().read.parquet(parquet_path)
+    stats = df.select(F.min("DEP_DELAY").alias("mn"), F.max("DEP_DELAY").alias("mx")).first()
+    if stats.mn is None and stats.mx is None:
+        return False, f"no non-null DEP_DELAY values in {parquet_path}"
+    if stats.mn < -60 or stats.mx > 600:
+        return False, f"DEP_DELAY out of range in {parquet_path}: min={stats.mn}, max={stats.mx} (expected [-60, 600])"
+    return True, f"DEP_DELAY in [-60, 600] in {parquet_path}: min={stats.mn}, max={stats.mx}"
 
 
 def check_no_future_fl_date(parquet_path: str) -> CheckResult:
     """FL_DATE must not be in the future."""
-    # TODO(P4): max(FL_DATE) <= today
-    pass
+    from datetime import date
+    from pyspark.sql import functions as F
+    df = _spark().read.parquet(parquet_path)
+    row = df.select(F.max(F.to_date("FL_DATE")).alias("d")).first()
+    max_date = row.d
+    if max_date is None:
+        return False, f"no parseable FL_DATE values in {parquet_path}"
+    today = date.today()
+    if max_date > today:
+        return False, f"FL_DATE in future: max={max_date} > today={today} in {parquet_path}"
+    return True, f"max FL_DATE = {max_date} (not in future) in {parquet_path}"
 
 
 # ── MongoDB checks (P4) ───────────────────────────────────────────────────────
