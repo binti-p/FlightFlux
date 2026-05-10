@@ -78,6 +78,29 @@ data-quality bugs:
 
 `data_quality/checks.py` should assert these.
 
+## Source column mapping
+
+The BTS PREZIP CSVs ship with column names like `FlightDate`, `DepDelay`,
+`Cancelled` — different from the canonical names used in this dictionary
+and in downstream ML code. The Spark batch job renames them on read.
+
+| PREZIP source column | Canonical (this Parquet) |
+|----------------------|--------------------------|
+| `FlightDate` | `FL_DATE` |
+| `Reporting_Airline` | `OP_CARRIER` |
+| `Origin` | `ORIGIN` |
+| `Dest` | `DEST` |
+| `CRSDepTime` | `CRS_DEP_TIME` |
+| `DepDelay` | `DEP_DELAY` |
+| `ArrDelay` | `ARR_DELAY` |
+| `Cancelled` | `CANCELLED` |
+| `Distance` | `DISTANCE` |
+| `CarrierDelay` | `CARRIER_DELAY` |
+| `WeatherDelay` | `WEATHER_DELAY` |
+
+Source of truth for the mapping: `SOURCE_TO_CANONICAL` in
+[`spark_jobs/csv_to_parquet.py`](spark_jobs/csv_to_parquet.py).
+
 ## How to read
 
 ```python

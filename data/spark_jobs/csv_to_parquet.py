@@ -23,6 +23,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Subset of BTS columns that downstream ML and streaming jobs need.
+# This is the *output* schema written to Parquet. The PREZIP source CSVs
+# use different column names (FlightDate, DepDelay, etc.); see
+# SOURCE_TO_CANONICAL below for the mapping applied at read time.
 BTS_SCHEMA = StructType(
     [
         StructField("FL_DATE", StringType(), nullable=True),
@@ -38,6 +41,25 @@ BTS_SCHEMA = StructType(
         StructField("WEATHER_DELAY", FloatType(), nullable=True),
     ]
 )
+
+# Mapping from BTS PREZIP source column names to the canonical BTS_SCHEMA
+# names used everywhere downstream (DICTIONARY.md, ml/, data_quality/).
+# The PREZIP files name columns like 'FlightDate', 'DepDelay'; the legacy
+# DL_SelectFields form used 'FL_DATE', 'DEP_DELAY'. We standardize on the
+# legacy names because that's what the dev plan and ML code reference.
+SOURCE_TO_CANONICAL = {
+    "FlightDate":        "FL_DATE",
+    "Reporting_Airline": "OP_CARRIER",
+    "Origin":            "ORIGIN",
+    "Dest":              "DEST",
+    "CRSDepTime":        "CRS_DEP_TIME",
+    "DepDelay":          "DEP_DELAY",
+    "ArrDelay":          "ARR_DELAY",
+    "Cancelled":         "CANCELLED",
+    "Distance":          "DISTANCE",
+    "CarrierDelay":      "CARRIER_DELAY",
+    "WeatherDelay":      "WEATHER_DELAY",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,18 +80,20 @@ def build_spark_session() -> SparkSession:
 
 
 def read_csvs(spark: SparkSession, input_path: str):
-    return (
+    raw = (
         spark.read
         .option("header", "true")
-        # enforceSchema=false makes Spark match columns by header name rather
-        # than position, so BTS files with extra columns we don't care about
-        # still parse cleanly into BTS_SCHEMA.
-        .option("enforceSchema", "false")
         .option("mode", "PERMISSIVE")
         .option("recursiveFileLookup", "true")
-        .schema(BTS_SCHEMA)
         .csv(input_path)
     )
+    # All CSV columns come in as strings; cast each one to its BTS_SCHEMA
+    # type while renaming from the PREZIP source name to the canonical name.
+    select_exprs = [
+        F.col(src).cast(BTS_SCHEMA[dest].dataType).alias(dest)
+        for src, dest in SOURCE_TO_CANONICAL.items()
+    ]
+    return raw.select(*select_exprs)
 
 
 def add_partition_columns(df):
