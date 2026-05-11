@@ -78,7 +78,35 @@ def build_main_panels():
     return html.Div(
         className="content-grid",
         children=[
-            panel("Live Delay Risk Map", "Redis/OpenSky live positions enriched by FastAPI /predict", dcc.Loading(dcc.Graph(id="live-map", className="map-graph")), "map-panel"),
+            html.Div(
+                className="panel map-panel",
+                children=[
+                    html.Div(className="panel-header", children=[html.H2("Live Delay Risk Map"), html.P("Redis/OpenSky live positions enriched by FastAPI /predict")]),
+                    html.Div(
+                        style={"position": "relative"},
+                        children=[
+                            dcc.Loading(dcc.Graph(id="live-map", className="map-graph")),
+                            html.Div(
+                                className="risk-legend",
+                                children=[
+                                    html.Div(className="risk-legend-item", children=[
+                                        html.Div(className="risk-legend-color", style={"backgroundColor": "#2fd17c"}),
+                                        html.Div("Low", className="risk-legend-label")
+                                    ]),
+                                    html.Div(className="risk-legend-item", children=[
+                                        html.Div(className="risk-legend-color", style={"backgroundColor": "#f5c542"}),
+                                        html.Div("Medium", className="risk-legend-label")
+                                    ]),
+                                    html.Div(className="risk-legend-item", children=[
+                                        html.Div(className="risk-legend-color", style={"backgroundColor": "#ff4d5e"}),
+                                        html.Div("High", className="risk-legend-label")
+                                    ]),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
             panel("Flight Delay Risk Table", "Top predicted delays from live cache records", dcc.Loading(build_risk_table()), "table-panel"),
             panel("Hub Congestion", "Derived operational load by nearest airport / origin", dcc.Loading(dcc.Graph(id="congestion-chart", className="chart-graph")), "congestion-panel"),
             panel("Activity Trend", "Active aircraft and delay signals over the selected window", dcc.Loading(dcc.Graph(id="activity-trend", className="chart-graph")), "trend-panel"),
