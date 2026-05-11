@@ -16,6 +16,7 @@ from pyspark.sql import functions as F
 
 from ml.evaluate import evaluate_model
 from ml.features import (
+    LABEL_COL,
     add_label,
     add_temporal_features,
     build_feature_pipeline,
