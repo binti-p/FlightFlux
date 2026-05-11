@@ -28,25 +28,25 @@ _model_loader: ModelLoader | None = None
 async def lifespan(app: FastAPI):
     global _model_loader
     logger.info("Loading model from %s", MODEL_S3_PATH)
-    # TODO(P4): _model_loader = ModelLoader(MODEL_S3_PATH); _model_loader.load()
+    _model_loader = ModelLoader(MODEL_S3_PATH)
+    _model_loader.load()
     yield
-    # TODO(P4): stop Spark session on shutdown if needed
+    if _model_loader:
+        _model_loader.stop()
 
 
 app = FastAPI(title="FlightFlux Prediction API", lifespan=lifespan)
 
 
 class PredictRequest(BaseModel):
-    carrier: str = Field(..., example="AA")
-    origin: str = Field(..., example="JFK")
-    dest: str = Field(..., example="LAX")
-    crs_dep_time: int = Field(..., example=1430, description="Scheduled departure time as HHMM integer")
-    distance: float = Field(..., example=2475.0)
-    month: int = Field(..., example=5, ge=1, le=12)
+    carrier: str = Field(..., example="AA", description="2-letter IATA carrier code")
+    hour_of_day: int = Field(..., example=14, ge=0, le=23, description="Local departure hour (0–23)")
+    day_of_week: int = Field(..., example=4, ge=1, le=7, description="Spark convention: 1=Sunday … 7=Saturday")
+    month: int = Field(..., example=7, ge=1, le=12)
 
 
 class PredictResponse(BaseModel):
-    predicted_delay_minutes: float
+    delay_probability: float
     risk_label: Literal["low", "medium", "high"]
 
 
@@ -59,8 +59,8 @@ def health_check():
 def predict(request: PredictRequest) -> PredictResponse:
     if _model_loader is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
-    # TODO(P4): call _model_loader.predict(request.model_dump()), return PredictResponse
-    pass
+    result = _model_loader.predict(request.model_dump())
+    return PredictResponse(**result)
 
 
 if __name__ == "__main__":

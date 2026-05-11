@@ -1,0 +1,13 @@
+[{
+  "Type": "Spark",
+  "Name": "flightflux-train-v1",
+  "ActionOnFailure": "CONTINUE",
+  "Args": [
+    "--deploy-mode", "client",
+    "--py-files", "s3://flightdelay-raw/ml.zip",
+    "s3://flightdelay-raw/ml/train.py",
+    "--input", "s3://flightdelay-processed/",
+    "--version", "v1",
+    "--years", "2021,2022,2023"
+  ]
+}]

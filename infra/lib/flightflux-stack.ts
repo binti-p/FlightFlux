@@ -150,6 +150,12 @@ export class FlightFluxStack extends cdk.Stack {
       },
       autoTerminationPolicy: { idleTimeout: 3600 },
       visibleToAllUsers: true,
+      bootstrapActions: [{
+        name: 'install-python-deps',
+        scriptBootstrapAction: {
+          path: `s3://${rawBucket.bucketName}/bootstrap/emr-bootstrap.sh`,
+        },
+      }],
     });
 
     // ─── EC2 — MongoDB (Private) ─────────────────────────────────────────────────
