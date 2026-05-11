@@ -9,8 +9,6 @@ import tempfile
 from typing import Any, Dict
 
 import boto3
-from pyspark.ml import PipelineModel
-from pyspark.sql import SparkSession
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +18,8 @@ class ModelLoader:
 
     def __init__(self, model_s3_path: str) -> None:
         self.model_s3_path = model_s3_path
-        self._model: PipelineModel | None = None
-        self._spark: SparkSession | None = None
+        self._model = None
+        self._spark = None
         self._local_model_dir: str | None = None
 
     def _download_model(self) -> str:
@@ -45,6 +43,8 @@ class ModelLoader:
 
     def load(self) -> None:
         """Download model from S3 to local disk, then load with Spark."""
+        from pyspark.ml import PipelineModel
+        from pyspark.sql import SparkSession
         self._local_model_dir = self._download_model()
         self._spark = (
             SparkSession.builder
