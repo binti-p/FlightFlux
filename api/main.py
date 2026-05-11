@@ -30,7 +30,11 @@ async def lifespan(app: FastAPI):
     global _model_loader
     logger.info("Loading model from %s", MODEL_S3_PATH)
     _model_loader = ModelLoader(MODEL_S3_PATH)
-    _model_loader.load()
+    try:
+        _model_loader.load()
+    except Exception as exc:
+        logger.warning("Model load failed, /predict will return 503: %s", exc)
+        _model_loader = None
     yield
     if _model_loader:
         _model_loader.stop()
