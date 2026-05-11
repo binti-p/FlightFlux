@@ -88,14 +88,12 @@ def main() -> None:
     train_df, test_df = features_df.randomSplit([0.8, 0.2], seed=args.seed)
     logger.info("Train: %d rows, Test: %d rows", train_df.count(), test_df.count())
 
-    # Weight delayed class inversely by its frequency so the RF doesn't
-    # collapse to always predicting on-time (delayed ~21%, on-time ~79%).
-    delayed_count = train_df.filter(F.col(LABEL_COL) == 1).count()
-    total_count = train_df.count()
-    delay_ratio = delayed_count / total_count
+    # Upweight delayed class by 2x — enough to stop the RF collapsing to
+    # always-on-time without the aggressive false-positive rate that
+    # full inverse-frequency weighting (5x) produces.
     train_df = train_df.withColumn(
         "class_weight",
-        F.when(F.col(LABEL_COL) == 1, 1.0 / delay_ratio).otherwise(1.0 / (1.0 - delay_ratio)),
+        F.when(F.col(LABEL_COL) == 1, 2.0).otherwise(1.0),
     )
     test_df = test_df.withColumn("class_weight", F.lit(1.0))
 
