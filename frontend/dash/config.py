@@ -45,7 +45,7 @@ class Settings:
 
     request_timeout_seconds: int = _env_int("REQUEST_TIMEOUT_SECONDS", 5)
     refresh_interval_ms: int = _env_int("REFRESH_INTERVAL_MS", 15_000)
-    max_predict_calls_per_refresh: int = _env_int("MAX_PREDICT_CALLS_PER_REFRESH", 60)
+    max_predict_calls_per_refresh: int = _env_int("MAX_PREDICT_CALLS_PER_REFRESH", 10)
 
     # Map defaults. carto-darkmatter does not require a Mapbox token.
     mapbox_style: str = os.environ.get("MAPBOX_STYLE", "carto-darkmatter")

@@ -126,16 +126,25 @@ def enrich_flights_with_predictions(flights: list[dict], call_api: bool = True) 
     rows are posted to /predict per dashboard refresh. Rows that already include
     prediction fields from the backend are not re-posted.
     """
+    prediction_cache: dict[tuple, dict] = {}
     enriched: list[dict] = []
     calls_made = 0
     for flight in flights:
         row = dict(flight)
         needs_prediction = row.get("predicted_delay_minutes") is None or row.get("risk_label") in {None, ""}
-        if call_api and needs_prediction and calls_made < SETTINGS.max_predict_calls_per_refresh:
-            prediction, _ = predict_delay(predict_request_from_flight(row))
+        if call_api and needs_prediction:
+            features = predict_request_from_flight(row)
+            cache_key = (features["carrier"], features["hour_of_day"], features["day_of_week"], features["month"])
+            if cache_key in prediction_cache:
+                prediction = prediction_cache[cache_key]
+            elif calls_made < SETTINGS.max_predict_calls_per_refresh:
+                prediction, _ = predict_delay(features)
+                prediction_cache[cache_key] = prediction
+                calls_made += 1
+            else:
+                prediction = {"predicted_delay_minutes": 0.0, "risk_label": "low"}
             row.update(prediction)
             row["delay_risk"] = score_from_delay(float(prediction["predicted_delay_minutes"]))
-            calls_made += 1
         else:
             delay = float(row.get("predicted_delay_minutes") or 0)
             row["risk_label"] = row.get("risk_label") or risk_label_from_delay(delay)
