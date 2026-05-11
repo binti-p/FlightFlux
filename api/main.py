@@ -14,11 +14,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from api.model_loader import ModelLoader
+from api.dashboard_routes import router as dashboard_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MODEL_S3_PATH: str = os.environ["MODEL_S3_PATH"]
+MODEL_S3_PATH: str = os.environ.get("MODEL_S3_PATH", "")
 
 # Shared model instance loaded once at startup
 _model_loader: ModelLoader | None = None
@@ -27,13 +28,16 @@ _model_loader: ModelLoader | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _model_loader
-    logger.info("Loading model from %s", MODEL_S3_PATH)
-    # TODO(P4): _model_loader = ModelLoader(MODEL_S3_PATH); _model_loader.load()
+    if MODEL_S3_PATH:
+        logger.info("Loading model from %s", MODEL_S3_PATH)
+        # TODO(P4): _model_loader = ModelLoader(MODEL_S3_PATH); _model_loader.load()
+    else:
+        logger.warning("MODEL_S3_PATH is not set. /predict will return 503 until model loading is implemented.")
     yield
-    # TODO(P4): stop Spark session on shutdown if needed
 
 
 app = FastAPI(title="FlightFlux Prediction API", lifespan=lifespan)
+app.include_router(dashboard_router)
 
 
 class PredictRequest(BaseModel):

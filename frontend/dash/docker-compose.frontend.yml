@@ -1,0 +1,14 @@
+services:
+  flightflux-dashboard:
+    build: .
+    container_name: flightflux-dashboard
+    ports:
+      - "8050:8050"
+    environment:
+      USE_MOCK: "false"
+      FLIGHTFLUX_API_BASE_URL: "http://host.docker.internal:8000"
+      FLIGHTFLUX_HEALTH_ENDPOINT: "/health"
+      FLIGHTFLUX_PREDICT_ENDPOINT: "/predict"
+      FLIGHTFLUX_LIVE_FLIGHTS_ENDPOINT: "/live-flights"
+      FLIGHTFLUX_SUMMARY_ENDPOINT: "/metrics/summary"
+      REFRESH_INTERVAL_MS: "15000"
