@@ -94,6 +94,9 @@ export class FlightFluxStack extends cdk.Stack {
     const ec2AppRole = new iam.Role(this, 'Ec2AppRole', {
       roleName: 'flightflux-ec2-role',
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+      ],
     });
     modelsBucket.grantRead(ec2AppRole);
 

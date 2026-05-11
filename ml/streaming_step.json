@@ -1,0 +1,10 @@
+[{
+  "Type": "CUSTOM_JAR",
+  "Name": "flightflux-streaming",
+  "ActionOnFailure": "CONTINUE",
+  "Jar": "command-runner.jar",
+  "Args": [
+    "bash", "-c",
+    "aws s3 cp s3://flightdelay-raw/scripts/run_streaming.sh /tmp/run_streaming.sh && chmod +x /tmp/run_streaming.sh && /tmp/run_streaming.sh"
+  ]
+}]
