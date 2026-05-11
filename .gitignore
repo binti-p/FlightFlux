@@ -62,3 +62,11 @@ models/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Dash frontend local files
+frontend/dash/.env
+frontend/dash/.venv/
+frontend/dash/venv/
+frontend/dash/.pytest_cache/
+frontend/dash/__pycache__/
+frontend/dash/**/*.pyc

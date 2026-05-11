@@ -14,11 +14,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from api.model_loader import ModelLoader
+from api.dashboard_routes import router as dashboard_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MODEL_S3_PATH: str = os.environ["MODEL_S3_PATH"]
+MODEL_S3_PATH: str = os.environ.get("MODEL_S3_PATH", "")
 
 # Shared model instance loaded once at startup
 _model_loader: ModelLoader | None = None
@@ -36,6 +37,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FlightFlux Prediction API", lifespan=lifespan)
+app.include_router(dashboard_router)
 
 
 class PredictRequest(BaseModel):
