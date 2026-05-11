@@ -1,61 +1,157 @@
-# FlightFlux
+# FlightFlux — Real-Time Flight Delay Prediction
 
-Real-time flight delay prediction: live positions from OpenSky stream through Kafka and Spark into Redis, while a Random Forest model trained on 5 years of BTS data serves predictions via FastAPI — all visualized on a Streamlit map.
+A big data pipeline that ingests live flight positions from the OpenSky Network, predicts arrival delays using a Random Forest model trained on 19 million historical BTS flights, and surfaces risk scores on an interactive Dash dashboard — all running on AWS.
+
+---
+
+## Problem Statement
+
+Flight delays cost the U.S. aviation industry over $28 billion annually and affect hundreds of millions of passengers. Delay prediction is a Big Data problem on three axes:
+
+- **Volume** — the Bureau of Transportation Statistics (BTS) publishes ~7 million domestic flight records per year. Training a model over multiple years requires processing tens of millions of rows with complex feature engineering.
+- **Velocity** — the OpenSky Network exposes live aircraft positions every 15 seconds. Serving predictions on that stream requires a low-latency pipeline that can ingest, enrich, and cache data continuously.
+- **Variety** — the training data (structured CSV from government databases) and the serving data (JSON state vectors from a REST API) have different schemas, vocabularies, and feature sets, requiring a carefully designed feature contract to bridge them.
+
+Traditional single-machine approaches cannot handle this combination: training on years of flight records exceeds memory limits, and real-time enrichment at 15-second intervals requires distributed stream processing. FlightFlux addresses all three dimensions using a distributed, cloud-native architecture.
+
+---
+
+## Big Data Design Decisions
+
+### Why Spark for batch and streaming?
+
+Spark provides a unified execution engine for both workloads. Batch training on 19M rows and real-time stream enrichment share the same API surface (DataFrames, MLlib), which eliminates the operational complexity of maintaining two separate processing stacks. Spark's Parquet-native partitioning (`year=/month=/`) enables predicate pushdown so training jobs scan only the partitions they need without reading the full dataset.
+
+### Why Kafka as the message bus?
+
+Kafka decouples the OpenSky poller from the stream processor. If the Spark Streaming job restarts or lags, messages are retained and replayed from the committed offset. This guarantees at-least-once delivery and makes the pipeline resilient to transient failures — critical for a 24/7 live data source.
+
+### Why a pre-trained model served via FastAPI rather than inline scoring?
+
+Scoring a Random Forest on every Kafka message inside Spark would require loading the model artifact on every executor, multiplying memory pressure across the cluster. Instead, training runs once on EMR and the fitted `PipelineModel` is serialised to S3. FastAPI loads it once on startup and serves single-row predictions in milliseconds. This separation also lets the model be retrained and versioned independently of the serving layer.
+
+### Why these four features?
+
+The feature set is constrained by the serving side. OpenSky state vectors expose a callsign and a timestamp — nothing more. Origin airport, destination, and route distance are not available at inference time. The four features — carrier, hour of day, day of week, month — are the intersection of what BTS training data and OpenSky live data can both produce, without any lookahead. This constraint is documented in [`ml/FEATURE_CONTRACT.md`](ml/FEATURE_CONTRACT.md).
+
+### Why Redis for live state?
+
+Redis key-value storage (with 60-second TTL per flight) gives the dashboard sub-millisecond reads on the current set of airborne flights without querying Kafka or MongoDB. The TTL ensures stale flights self-expire without a cleanup job.
 
 ---
 
 ## Architecture
 
-Two parallel tracks feed a single dashboard.
-
-**Live track** — position data polled every 15 seconds, enriched in-flight, cached for the dashboard.  
-**Historical track** — 5 years of BTS on-time records processed in batch to train and persist a prediction model.
+Two parallel tracks converge at the dashboard.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         LIVE TRACK  (P3)                             │
+│                           LIVE TRACK                                 │
 │                                                                      │
 │  OpenSky API ──► Kafka (MSK) ──► Spark Structured Streaming         │
 │  (15 s poll)     flights-raw       │               │                 │
-│                                    ▼               ▼                 │
+│                  flights-enriched  ▼               ▼                 │
 │                               Redis (live cache)  MongoDB (docs)    │
 └────────────────────────────────────┬─────────────────────────────────┘
                                      │
                               ┌──────▼──────┐
-                              │  Streamlit  │  (P4)
-                              │  Dashboard  │◄──── FastAPI /predict  (P4)
+                              │    Dash     │
+                              │  Dashboard  │◄──── FastAPI /predict
                               └─────────────┘             ▲
 ┌─────────────────────────────────────────────────────────┘
-│                  HISTORICAL TRACK  (P1 + P2)            │
-│                                                         │
-│  BTS CSVs ──► S3 Parquet ──► Spark MLlib ──► Model on S3           │
-│   (P1)          (P1)            (P2)           (P2)                 │
+│                      HISTORICAL TRACK                               │
+│                                                                     │
+│  BTS CSVs ──► S3 Parquet ──► Spark MLlib RF ──► Model on S3       │
+│  (2021–23)    (partitioned)   (EMR cluster)      (versioned)       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### Historical track
+
+1. Raw BTS CSV files (2021–2023, ~7 GB) are bulk-downloaded from the Bureau of Transportation Statistics and stored in `s3://flightdelay-raw/bts/`.
+2. A Spark batch job converts them to Snappy-compressed Parquet partitioned by `year=/month=/` in `s3://flightdelay-processed/`, projecting only the 11 columns needed downstream.
+3. A second Spark job on EMR reads the Parquet, engineers four features, trains a `RandomForestClassifier` via Spark MLlib, and serialises the fitted `PipelineModel` to `s3://flightdelay-models/v2/`. The full preprocessing pipeline (StringIndexer → VectorAssembler → RandomForest) is saved as a single artifact so the API can call `model.transform()` on raw feature rows without any pre-processing logic on the serving side.
+
+### Live track
+
+1. A Python poller hits the OpenSky `/states/all` REST endpoint every 15 seconds and publishes raw state vectors to the `flights-raw` Kafka topic on Amazon MSK.
+2. A Spark Structured Streaming job reads from `flights-raw`, enriches each state with airport reference data (static join from MongoDB), and writes enriched documents to `flights-enriched` and live Redis keys (`flight:<callsign>`, 60-second TTL).
+
+### Serving layer
+
+FastAPI loads the trained `PipelineModel` from S3 on startup. Each `/predict` request supplies four features; the model returns `delay_probability` (P(arrival delay > 15 min)) and a `risk_label`. The dashboard calls `/predict` for each active flight on every 15-second refresh, capped at 60 calls per cycle to avoid overloading the service.
+
 ---
 
-## Quick Start
+## ML Model
 
-```bash
-# 1. Clone and switch to the integration branch
-git clone <repo-url>
-cd FlightFlux
-git checkout develop
+| Property | Value |
+|----------|-------|
+| Algorithm | Random Forest (binary classifier) |
+| Training data | 19,153,634 flights, BTS 2021–2023 |
+| Label | `is_delayed = 1` if arrival delay > 15 minutes |
+| Features | carrier, hour_of_day, day_of_week, month |
+| Hyperparameters | 50 trees, max depth 8 |
+| Class weighting | 2× on delayed class (19% of data) |
+| AUC | 0.643 |
+| Precision | 0.747 |
 
-# 2. Configure environment
-cp .env.example .env
-# Open .env and fill in AWS resource endpoints after P1 provisions infra
+The pipeline is versioned: `v1` (baseline, 20 trees, 5× weight) was replaced by `v2` (50 trees, 2× weight) after observing that aggressive class weighting produced 1.3M false positives vs. 112K with softer weighting at equivalent AUC.
 
-# 3. Install dependencies
-pip install -r requirements.txt
+---
 
-# 4. Verify AWS credentials
-aws sts get-caller-identity
+## API
+
+```
+GET  /health
+POST /predict
 ```
 
-> AWS resources (MSK, EMR, ElastiCache, MongoDB on EC2, S3) must be provisioned before running any component.  
-> See [`infra/README.md`](infra/README.md) for the step-by-step provisioning checklist.
+**Request:**
+```json
+{"carrier": "AA", "hour_of_day": 14, "day_of_week": 4, "month": 7}
+```
+
+**Response:**
+```json
+{"delay_probability": 0.478, "risk_label": "medium"}
+```
+
+`risk_label` thresholds: `low` < 0.3, `medium` 0.3–0.6, `high` > 0.6.
+
+---
+
+## Dashboard
+
+Interactive Plotly Dash application with:
+- **Live map** — flights coloured by risk label, refreshed every 15 seconds from Redis
+- **Risk table** — top delayed flights sorted by probability
+- **KPI cards** — total flights, delayed count, high-risk count, congestion alerts
+- **Manual prediction tester** — sidebar form that calls `/predict` ad-hoc
+
+**Feature derivation from OpenSky at serve time:**
+
+| Model feature | Derived from |
+|--------------|-------------|
+| `carrier` | `callsign[:3]` mapped ICAO→IATA |
+| `hour_of_day` | `datetime.fromtimestamp(time_position).hour` |
+| `day_of_week` | `(isoweekday() % 7) + 1` (Spark convention: 1=Sunday) |
+| `month` | `datetime.fromtimestamp(time_position).month` |
+
+---
+
+## Stack
+
+| Layer | Technology | Reason |
+|-------|-----------|--------|
+| Batch compute | Amazon EMR (Spark 3.5) | Scales to 19M rows; MLlib unified with streaming |
+| Stream processing | Spark Structured Streaming + Amazon MSK | Fault-tolerant, offset-committed, at-least-once |
+| Object storage | Amazon S3 | Parquet partitioning; model versioning |
+| Live cache | Redis (ElastiCache) | Sub-ms reads; TTL-based expiry |
+| Document store | MongoDB (EC2) | Flexible schema for enriched flight docs |
+| Prediction API | FastAPI + Uvicorn | Async, low-latency, Pydantic validation |
+| Dashboard | Plotly Dash | Python-native; reactive callbacks; no JS required |
+| Infrastructure | AWS CDK (TypeScript) | Reproducible; all resources version-controlled |
 
 ---
 
@@ -63,60 +159,28 @@ aws sts get-caller-identity
 
 ```
 FlightFlux/
-├── infra/          AWS provisioning checklist and resource docs          (P1)
-├── data/           BTS ingestion and Spark batch CSV→Parquet conversion  (P1)
-├── ml/             Feature engineering, RF training, evaluation          (P2)
-├── streaming/      OpenSky poller, Kafka, Spark Streaming, loaders       (P3)
-├── api/            FastAPI prediction service                            (P4)
-├── dashboard/      Streamlit live map and risk table                     (P4)
-├── data_quality/   Data assertion checks                             (P4+P1)
-├── tests/          Unit tests — each engineer adds tests for their component
-└── docs/           Architecture, GitHub setup guide, weekly standups
+├── infra/              CDK stack, environment config, runbook
+├── data/               BTS download script, Spark CSV→Parquet job, data dictionary
+├── ml/                 Feature engineering, RF training, evaluation, EMR step configs
+├── streaming/          OpenSky poller, Kafka schemas, Spark Streaming job, airport loader
+├── api/                FastAPI service, model loader
+├── frontend/dash/      Dash dashboard — map, risk table, API client, mock data
+├── data_quality/       Spark assertions on Parquet
+└── tests/              Unit tests per component
 ```
 
 ---
 
-## Team & Ownership
-
-| Person | Role | Directories |
-|--------|------|-------------|
-| P1 | Infrastructure + Data Engineer | `infra/`, `data/` |
-| P2 | ML Engineer | `ml/` |
-| P3 | Streaming Engineer | `streaming/` |
-| P4 | Backend + Frontend Engineer | `api/`, `dashboard/`, `data_quality/` |
-
----
-
-## Branching & Development Workflow
-
-Two protected long-lived branches:
-
-| Branch | Purpose | Approvals | Merge strategy |
-|--------|---------|-----------|----------------|
-| `main` | Production / demo snapshots | 2 | Merge commit |
-| `develop` | Integration target for all feature work | 1 | — |
-
-**Daily flow:**
+## Running Locally (Mock Mode)
 
 ```bash
-# Start new work — always branch off develop
-git checkout develop && git pull origin develop
-git checkout -b feature/p2-rf-training
-
-# ... make changes, commit ...
-
-# Open a PR into develop
-# Title: [P2] Add Random Forest training script
+cd frontend/dash
+pip install -r requirements.txt
+cp .env.example .env      # leave API_BASE_URL blank to use mock data
+python app.py
 ```
 
-**Rules:**
-- Nobody pushes directly to `main` or `develop` — both are protected.
-- Feature branch naming: `feature/<owner>-<short-name>` (e.g. `feature/p3-opensky-poller`) or `fix/<owner>-<short-name>` for bug fixes.
-- Feature → `develop`: squash-and-merge, **1 approval**, CI must pass.
-- `develop` → `main`: merge commit, **2 approvals**, done at end of each week or before demo.
-- PR title prefix: `[P1]` / `[P2]` / `[P3]` / `[P4]` for contribution tracking.
-
-See [`docs/github_setup.md`](docs/github_setup.md) for the branch protection configuration checklist.
+The dashboard runs entirely on synthetic data when the backend is unreachable, making local development possible without AWS access.
 
 ---
 
