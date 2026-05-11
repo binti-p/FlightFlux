@@ -1,0 +1,36 @@
+[
+  {
+    "Type": "CUSTOM_JAR",
+    "Name": "download-bts-2021-2023",
+    "ActionOnFailure": "CONTINUE",
+    "Jar": "command-runner.jar",
+    "Args": [
+      "bash", "-c",
+      "aws s3 cp s3://flightdelay-raw/scripts/download_bts.sh /tmp/download_bts.sh && chmod +x /tmp/download_bts.sh && S3_PREFIX=s3://flightdelay-raw/bts /tmp/download_bts.sh 2021 2023"
+    ]
+  },
+  {
+    "Type": "Spark",
+    "Name": "csv-to-parquet",
+    "ActionOnFailure": "CONTINUE",
+    "Args": [
+      "--deploy-mode", "client",
+      "s3://flightdelay-raw/scripts/csv_to_parquet.py",
+      "--input", "s3://flightdelay-raw/bts/",
+      "--output", "s3://flightdelay-processed/"
+    ]
+  },
+  {
+    "Type": "Spark",
+    "Name": "flightflux-train-v1",
+    "ActionOnFailure": "CONTINUE",
+    "Args": [
+      "--deploy-mode", "client",
+      "--py-files", "s3://flightdelay-raw/ml.zip",
+      "s3://flightdelay-raw/ml/train.py",
+      "--input", "s3://flightdelay-processed/",
+      "--version", "v1",
+      "--years", "2021,2022,2023"
+    ]
+  }
+]
