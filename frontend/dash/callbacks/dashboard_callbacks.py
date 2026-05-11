@@ -110,13 +110,14 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def run_manual_prediction(_n, carrier, origin, dest, crs_dep_time, distance, month):
+        from datetime import datetime
+        hour = int(crs_dep_time or 1200) // 100
+        dow = datetime.now().isoweekday() % 7 + 1  # Spark convention: 1=Sun…7=Sat
         features = {
-            "carrier": str(carrier or "AA").upper()[:3],
-            "origin": origin or "JFK",
-            "dest": dest or "LAX",
-            "crs_dep_time": int(crs_dep_time or 1200),
-            "distance": float(distance or 500),
-            "month": int(month or 1),
+            "carrier": str(carrier or "AA").upper()[:2],
+            "hour_of_day": hour,
+            "day_of_week": dow,
+            "month": int(month or datetime.now().month),
         }
         prediction, ok = predict_delay(features)
         risk = str(prediction.get("risk_label", "low")).lower()

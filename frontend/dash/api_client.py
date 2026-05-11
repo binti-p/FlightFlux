@@ -83,12 +83,12 @@ def get_live_flights() -> tuple[list[dict], bool]:
     else:
         rows = payload or []
 
+    api_reachable = ok
     flights = normalize_flights(rows)
     if not flights:
         flights = fallback
-        ok = False
 
-    enriched = enrich_flights_with_predictions(flights, call_api=ok)
+    enriched = enrich_flights_with_predictions(flights, call_api=api_reachable)
     _CACHE["live_flights"] = enriched
     return enriched, ok
 
@@ -130,7 +130,7 @@ def enrich_flights_with_predictions(flights: list[dict], call_api: bool = True) 
     calls_made = 0
     for flight in flights:
         row = dict(flight)
-        needs_prediction = "predicted_delay_minutes" not in row or row.get("risk_label") in {None, ""}
+        needs_prediction = row.get("predicted_delay_minutes") is None or row.get("risk_label") in {None, ""}
         if call_api and needs_prediction and calls_made < SETTINGS.max_predict_calls_per_refresh:
             prediction, _ = predict_delay(predict_request_from_flight(row))
             row.update(prediction)

@@ -26,15 +26,15 @@ def normalize_flight(row: dict) -> dict:
     delay = _first_present(row, ["predicted_delay_minutes", "delay_minutes", "prediction"], None)
     risk_label = _first_present(row, ["risk_label", "risk"], None)
 
+    has_prediction = delay is not None
     if delay is None:
-        # Fall back to an existing normalized risk score when prediction has not been called yet.
         risk_score = float(_first_present(row, ["delay_risk", "risk_score"], 0.0) or 0.0)
-        delay = round(risk_score * 60, 1)
+        delay = round(risk_score * 60, 1) if risk_score else None
     else:
         delay = float(delay)
         risk_score = score_from_delay(delay)
 
-    if not risk_label:
+    if not risk_label and delay is not None:
         risk_label = risk_label_from_delay(delay)
 
     callsign = str(_first_present(row, ["callsign", "call_sign"], "UNKNOWN")).strip() or "UNKNOWN"
@@ -68,9 +68,9 @@ def normalize_flight(row: dict) -> dict:
         "crs_dep_time": int(_first_present(row, ["crs_dep_time", "scheduled_departure_time"], datetime.now().hour * 100 + datetime.now().minute) or 0),
         "distance": float(_first_present(row, ["distance"], 500.0) or 500.0),
         "month": int(_first_present(row, ["month"], datetime.now().month) or datetime.now().month),
-        "predicted_delay_minutes": round(delay, 1),
-        "risk_label": str(risk_label).lower(),
-        "delay_risk": risk_score,
+        "predicted_delay_minutes": round(delay, 1) if delay is not None else None,
+        "risk_label": str(risk_label).lower() if risk_label else None,
+        "delay_risk": risk_score if has_prediction else None,
         "timestamp": timestamp,
         "source": _first_present(row, ["source"], "api"),
     }
