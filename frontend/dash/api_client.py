@@ -93,18 +93,30 @@ def get_live_flights() -> tuple[list[dict], bool]:
     return enriched, ok
 
 
+def _risk_label_from_probability(prob: float) -> str:
+    if prob >= 0.6:
+        return "high"
+    if prob >= 0.3:
+        return "medium"
+    return "low"
+
+
 def predict_delay(features: dict) -> tuple[dict, bool]:
-    """Call FlightFlux /predict using the project PredictRequest schema."""
-    fallback_delay = float(features.get("predicted_delay_minutes") or 0)
-    fallback = {
-        "predicted_delay_minutes": fallback_delay,
-        "risk_label": risk_label_from_delay(fallback_delay),
-    }
+    """Call FlightFlux /predict using the project PredictRequest schema.
+
+    The API returns delay_probability (P(arrival delay >15 min)) and risk_label.
+    We convert probability to a display-friendly delay_minutes estimate so the
+    rest of the dashboard (which expects predicted_delay_minutes) keeps working.
+    """
+    fallback = {"predicted_delay_minutes": 0.0, "risk_label": "low"}
     payload, ok = _post_json(SETTINGS.predict_endpoint, features, fallback)
     if not isinstance(payload, dict):
         return fallback, False
-    delay = float(payload.get("predicted_delay_minutes", fallback_delay) or 0)
-    return {"predicted_delay_minutes": round(delay, 1), "risk_label": payload.get("risk_label") or risk_label_from_delay(delay)}, ok
+    prob = float(payload.get("delay_probability", 0.0) or 0.0)
+    risk_label = payload.get("risk_label") or _risk_label_from_probability(prob)
+    # Express probability as notional delay minutes for display (0-1 → 0-60 min)
+    delay_minutes = round(prob * 60, 1)
+    return {"predicted_delay_minutes": delay_minutes, "risk_label": risk_label}, ok
 
 
 def enrich_flights_with_predictions(flights: list[dict], call_api: bool = True) -> list[dict]:

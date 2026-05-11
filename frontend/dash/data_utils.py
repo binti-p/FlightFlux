@@ -81,15 +81,42 @@ def normalize_flights(rows: list[dict]) -> list[dict]:
     return [row for row in normalized if row["lat"] is not None and row["lon"] is not None]
 
 
+_ICAO_TO_IATA: dict[str, str] = {
+    "AAL": "AA", "DAL": "DL", "UAL": "UA", "SWA": "WN", "JBU": "B6",
+    "ASA": "AS", "SKW": "OO", "FFT": "F9", "NKS": "NK", "HAL": "HA",
+    "EDV": "9E", "PDT": "EV", "RPA": "YX", "SJI": "S5", "CPZ": "CP",
+    "ACY": "YV", "ENY": "MQ", "GJS": "G4", "VXP": "VX", "WJA": "WS",
+    "ACA": "AC", "BAW": "BA", "KLM": "KL", "DLH": "LH", "AFR": "AF",
+    "TVF": "TO", "IBE": "IB", "QFA": "QF", "UAE": "EK", "SIA": "SQ",
+}
+
+
 def predict_request_from_flight(flight: dict) -> dict:
-    """Build the exact FastAPI PredictRequest payload used by FlightFlux."""
+    """Build the FastAPI PredictRequest payload from a normalized flight row.
+
+    The model contract (ml/FEATURE_CONTRACT.md) requires:
+        carrier, hour_of_day, day_of_week (1=Sun..7=Sat), month
+    hour_of_day and day_of_week are derived from the flight's timestamp.
+    """
+    ts = flight.get("time_position") or flight.get("timestamp")
+    if isinstance(ts, str):
+        try:
+            dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
+        except ValueError:
+            dt = datetime.now(timezone.utc)
+    elif isinstance(ts, (int, float)):
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    else:
+        dt = datetime.now(timezone.utc)
+
+    icao = str(flight.get("carrier") or "UNK").strip().upper()
+    carrier = _ICAO_TO_IATA.get(icao, icao[:2] if len(icao) >= 2 else "UNK")
+
     return {
-        "carrier": str(flight.get("carrier") or "UNK")[:3],
-        "origin": str(flight.get("origin") or flight.get("airport") or "UNK")[:3],
-        "dest": str(flight.get("dest") or "UNK")[:3],
-        "crs_dep_time": int(flight.get("crs_dep_time") or 1200),
-        "distance": float(flight.get("distance") or 500.0),
-        "month": int(flight.get("month") or datetime.now().month),
+        "carrier": carrier,
+        "hour_of_day": dt.hour,
+        "day_of_week": (dt.isoweekday() % 7) + 1,
+        "month": dt.month,
     }
 
 
