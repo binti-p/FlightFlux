@@ -42,9 +42,16 @@ def build_producer() -> KafkaProducer:
 
 def fetch_states() -> Optional[List[List[Any]]]:
     """Return raw state vectors from OpenSky, or None on error."""
+    username = os.environ.get("OPENSKY_USERNAME")
+    password = os.environ.get("OPENSKY_PASSWORD")
+    auth = (username, password) if username and password else None
     try:
-        response = requests.get(f"{OPENSKY_BASE_URL}/states/all")
-        response.raise_for_status()  # Raise an exception for HTTP errors
+        response = requests.get(
+            f"{OPENSKY_BASE_URL}/states/all",
+            auth=auth,
+            timeout=30,
+        )
+        response.raise_for_status()
         return response.json()["states"]
     except requests.exceptions.RequestException as e:
         logger.error("Error fetching states from OpenSky: %s", e)
