@@ -5,8 +5,10 @@ wraps single-row inference so FastAPI doesn't need to manage a SparkSession dire
 
 import logging
 import os
+import tempfile
 from typing import Any, Dict
 
+import boto3
 from pyspark.ml import PipelineModel
 from pyspark.sql import SparkSession
 
@@ -20,27 +22,66 @@ class ModelLoader:
         self.model_s3_path = model_s3_path
         self._model: PipelineModel | None = None
         self._spark: SparkSession | None = None
+        self._local_model_dir: str | None = None
+
+    def _download_model(self) -> str:
+        """Download the PipelineModel directory from S3 to local disk."""
+        path = self.model_s3_path.replace("s3://", "").rstrip("/")
+        bucket, prefix = path.split("/", 1)
+        local_dir = tempfile.mkdtemp(prefix="flightflux-model-")
+        s3 = boto3.client("s3")
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                relative = key[len(prefix) + 1:]
+                if not relative:
+                    continue
+                local_path = os.path.join(local_dir, relative)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                s3.download_file(bucket, key, local_path)
+        logger.info("Model downloaded from %s to %s", self.model_s3_path, local_dir)
+        return local_dir
 
     def load(self) -> None:
-        """Initialize Spark and load the PipelineModel from S3."""
-        # TODO(P4): build a local SparkSession (master=local[2]) for inference
-        # TODO(P4): self._model = PipelineModel.load(self.model_s3_path)
-        pass
+        """Download model from S3 to local disk, then load with Spark."""
+        self._local_model_dir = self._download_model()
+        self._spark = (
+            SparkSession.builder
+            .appName("flightflux-api")
+            .master("local[2]")
+            .getOrCreate()
+        )
+        self._model = PipelineModel.load(self._local_model_dir)
+        logger.info("Model loaded from %s", self._local_model_dir)
 
     def predict(self, features: Dict[str, Any]) -> Dict[str, Any]:
         """
         Run inference on a single feature dict.
 
+        Expects keys: carrier (str), hour_of_day (int), day_of_week (int), month (int).
         Returns a dict with keys:
-            predicted_delay_minutes: float
+            delay_probability: float  — P(delayed), i.e. probability[1]
             risk_label: "low" | "medium" | "high"
         """
-        if self._model is None:
+        if self._model is None or self._spark is None:
             raise RuntimeError("Model not loaded — call load() first")
-        # TODO(P4): create a one-row Spark DataFrame from features
-        # TODO(P4): call self._model.transform(df), extract prediction column
-        # TODO(P4): derive risk_label: <5 min → low, 5–30 → medium, >30 → high
-        pass
+
+        row = self._spark.createDataFrame(
+            [(features["carrier"], features["hour_of_day"], features["day_of_week"], features["month"])],
+            ["carrier", "hour_of_day", "day_of_week", "month"],
+        )
+        result = self._model.transform(row).collect()[0]
+        prob_delayed = float(result["probability"][1])
+
+        if prob_delayed < 0.3:
+            risk_label = "low"
+        elif prob_delayed < 0.6:
+            risk_label = "medium"
+        else:
+            risk_label = "high"
+
+        return {"delay_probability": prob_delayed, "risk_label": risk_label}
 
     def stop(self) -> None:
         if self._spark:

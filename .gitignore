@@ -41,6 +41,9 @@ models/
 *.joblib
 *.model
 
+# Build artifacts
+*.zip
+
 # IDEs
 .idea/
 .claude/
